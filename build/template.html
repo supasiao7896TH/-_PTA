@@ -1,0 +1,426 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>คลังความรู้ PTA</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f5f6f8;
+    --card: #ffffff;
+    --text: #1a1c20;
+    --muted: #6b7280;
+    --accent: #2563eb;
+    --border: #e2e5ea;
+    --mark-bg: #fde68a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16181c;
+      --card: #1f2229;
+      --text: #eceef1;
+      --muted: #9aa1ac;
+      --accent: #5b9dff;
+      --border: #2c3038;
+      --mark-bg: #7c5e00;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "Segoe UI", "Tahoma", "Sarabun", system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+  header {
+    padding: 20px 16px 12px;
+    text-align: center;
+  }
+  header h1 { margin: 0 0 4px; font-size: 1.5rem; }
+  header p { margin: 0; color: var(--muted); font-size: 0.9rem; }
+
+  .tabs {
+    display: flex;
+    justify-content: center;
+    gap: 8px;
+    padding: 8px 16px 16px;
+  }
+  .tab-btn {
+    padding: 8px 18px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--card);
+    color: var(--text);
+    cursor: pointer;
+    font-size: 0.95rem;
+  }
+  .tab-btn.active {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+  }
+
+  main {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 0 16px 60px;
+  }
+  .view { display: none; }
+  .view.active { display: block; }
+
+  .search-box {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+  .search-box input {
+    flex: 1;
+    padding: 12px 14px;
+    font-size: 1rem;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--card);
+    color: var(--text);
+  }
+  .search-box button {
+    padding: 12px 20px;
+    font-size: 1rem;
+    border-radius: 10px;
+    border: none;
+    background: var(--accent);
+    color: #fff;
+    cursor: pointer;
+  }
+
+  .result-card, .doc-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 16px;
+    margin-bottom: 12px;
+  }
+  .result-excerpt { line-height: 1.6; margin: 0 0 8px; white-space: pre-wrap; }
+  .result-meta { font-size: 0.85rem; color: var(--muted); margin-bottom: 8px; }
+  .doc-title { font-weight: 600; margin: 0 0 4px; }
+  .doc-desc { color: var(--muted); font-size: 0.9rem; margin: 0 0 10px; }
+
+  .actions { display: flex; gap: 8px; }
+  .actions button {
+    padding: 6px 12px;
+    font-size: 0.85rem;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--accent);
+    cursor: pointer;
+  }
+
+  mark {
+    background: var(--mark-bg);
+    color: inherit;
+    border-radius: 3px;
+    padding: 0 2px;
+  }
+
+  .empty-state {
+    text-align: center;
+    color: var(--muted);
+    padding: 40px 16px;
+  }
+
+  .status-line { color: var(--muted); font-size: 0.85rem; margin-bottom: 10px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>คลังความรู้ PTA</h1>
+  <p>ค้นหาข้อมูลจากเอกสารกระบวนการผลิต PTA แบบออฟไลน์ — ไม่ต้องใช้อินเทอร์เน็ต</p>
+</header>
+
+<div class="tabs">
+  <button class="tab-btn active" data-view="search">ค้นหา</button>
+  <button class="tab-btn" data-view="library">ห้องสมุดเอกสาร</button>
+</div>
+
+<main>
+  <section id="view-search" class="view active">
+    <div class="search-box">
+      <input id="query-input" type="text" placeholder="พิมพ์คำค้นหา เช่น interlock, alarm, ESD, กระบวนการ..." autocomplete="off">
+      <button id="search-btn">ค้นหา</button>
+    </div>
+    <div id="status-line" class="status-line"></div>
+    <div id="results"></div>
+  </section>
+
+  <section id="view-library" class="view">
+    <div id="library-list"></div>
+  </section>
+</main>
+
+<script id="kb-data" type="application/json">/*__KB_DATA__*/</script>
+<script id="kb-pdfs" type="application/json">/*__KB_PDFS__*/</script>
+
+<script>
+(function () {
+  "use strict";
+
+  var KB = JSON.parse(document.getElementById("kb-data").textContent);
+  var PDFS = JSON.parse(document.getElementById("kb-pdfs").textContent);
+  var DOCS = KB.docs;
+  var CHUNKS = KB.chunks;
+
+  var docById = {};
+  DOCS.forEach(function (d) { docById[d.id] = d; });
+
+  // ---------- Tokenizer ----------
+  var THAI_RE = /[฀-๿]+/g;
+  var WORD_RE = /[\p{L}\p{N}]+/gu;
+
+  function thaiNGrams(run, n) {
+    var grams = [];
+    for (var i = 0; i <= run.length - n; i++) {
+      grams.push(run.slice(i, i + n));
+    }
+    return grams;
+  }
+
+  function tokenize(text) {
+    var tokens = [];
+    var lower = text.toLowerCase();
+
+    var thaiRuns = lower.match(THAI_RE) || [];
+    thaiRuns.forEach(function (run) {
+      if (run.length <= 3) {
+        tokens.push(run);
+      } else {
+        tokens = tokens.concat(thaiNGrams(run, 2), thaiNGrams(run, 3));
+      }
+    });
+
+    var nonThai = lower.replace(THAI_RE, " ");
+    var words = nonThai.match(WORD_RE) || [];
+    tokens = tokens.concat(words);
+
+    return tokens;
+  }
+
+  // ---------- Index (built once at load) ----------
+  var chunkTokenCounts = []; // Map-like plain objects
+  var docFreq = Object.create(null);
+  var totalLen = 0;
+
+  CHUNKS.forEach(function (chunk, idx) {
+    var tokens = tokenize(chunk.text);
+    var tf = Object.create(null);
+    tokens.forEach(function (t) { tf[t] = (tf[t] || 0) + 1; });
+    chunkTokenCounts[idx] = { tf: tf, len: tokens.length };
+    totalLen += tokens.length;
+    Object.keys(tf).forEach(function (t) { docFreq[t] = (docFreq[t] || 0) + 1; });
+  });
+
+  var N = CHUNKS.length;
+  var avgLen = N ? totalLen / N : 1;
+  var idf = Object.create(null);
+  Object.keys(docFreq).forEach(function (t) {
+    idf[t] = Math.log(1 + (N - docFreq[t] + 0.5) / (docFreq[t] + 0.5));
+  });
+
+  var K1 = 1.5, B = 0.75;
+
+  function search(query, limit) {
+    var qTokens = tokenize(query);
+    if (!qTokens.length) return [];
+    var qLower = query.toLowerCase();
+
+    var scores = [];
+    for (var i = 0; i < CHUNKS.length; i++) {
+      var entry = chunkTokenCounts[i];
+      var score = 0;
+      for (var j = 0; j < qTokens.length; j++) {
+        var t = qTokens[j];
+        var f = entry.tf[t];
+        if (!f) continue;
+        var termIdf = idf[t] || 0;
+        var denom = f + K1 * (1 - B + B * (entry.len / avgLen));
+        score += termIdf * ((f * (K1 + 1)) / denom);
+      }
+      if (score > 0 && qLower.length >= 2 && CHUNKS[i].text.toLowerCase().indexOf(qLower) !== -1) {
+        score *= 1.8; // exact substring boost
+      }
+      if (score > 0) scores.push({ idx: i, score: score });
+    }
+
+    scores.sort(function (a, b) { return b.score - a.score; });
+    return scores.slice(0, limit || 15).map(function (s) { return CHUNKS[s.idx]; });
+  }
+
+  // ---------- Highlighting ----------
+  function escapeRegExp(s) {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+  function escapeHtml(s) {
+    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  function highlight(text, query) {
+    var escaped = escapeHtml(text);
+    var qLower = query.toLowerCase().trim();
+    if (!qLower) return escaped;
+
+    var terms = [];
+    var thaiRuns = qLower.match(THAI_RE) || [];
+    thaiRuns.forEach(function (r) { terms.push(r); });
+    var words = (qLower.replace(THAI_RE, " ").match(WORD_RE) || []);
+    words.forEach(function (w) { if (w.length >= 2) terms.push(w); });
+    if (qLower.length >= 2) terms.push(qLower);
+
+    terms = terms.filter(function (t, i) { return t && terms.indexOf(t) === i; });
+    terms.sort(function (a, b) { return b.length - a.length; });
+    if (!terms.length) return escaped;
+
+    var pattern = terms.map(escapeRegExp).join("|");
+    var re = new RegExp("(" + pattern + ")", "gi");
+    return escaped.replace(re, "<mark>$1</mark>");
+  }
+
+  // ---------- PDF open/download (blob URL, built just-in-time) ----------
+  function base64ToBlob(b64) {
+    var binary = atob(b64);
+    var len = binary.length;
+    var bytes = new Uint8Array(len);
+    for (var i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
+    return new Blob([bytes], { type: "application/pdf" });
+  }
+
+  function openPdf(docId) {
+    var blob = base64ToBlob(PDFS[docId]);
+    var url = URL.createObjectURL(blob);
+    window.open(url, "_blank");
+  }
+
+  function downloadPdf(docId) {
+    var doc = docById[docId];
+    var blob = base64ToBlob(PDFS[docId]);
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = doc.file;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 5000);
+  }
+
+  // ---------- Rendering ----------
+  var resultsEl = document.getElementById("results");
+  var statusEl = document.getElementById("status-line");
+  var queryInput = document.getElementById("query-input");
+
+  function renderResults(query) {
+    var results = search(query, 15);
+    resultsEl.innerHTML = "";
+
+    if (!query.trim()) {
+      statusEl.textContent = "";
+      return;
+    }
+
+    if (!results.length) {
+      statusEl.textContent = "ไม่พบผลลัพธ์";
+      resultsEl.innerHTML = '<div class="empty-state">ลองใช้คำค้นหาอื่น หรือคำที่สั้นลง</div>';
+      return;
+    }
+
+    statusEl.textContent = "พบ " + results.length + " ผลลัพธ์";
+
+    results.forEach(function (chunk) {
+      var doc = docById[chunk.doc];
+      var card = document.createElement("div");
+      card.className = "result-card";
+
+      var excerpt = document.createElement("p");
+      excerpt.className = "result-excerpt";
+      excerpt.innerHTML = highlight(chunk.text, query);
+
+      var meta = document.createElement("div");
+      meta.className = "result-meta";
+      meta.textContent = doc.title + " — หน้า " + chunk.page;
+
+      var actions = document.createElement("div");
+      actions.className = "actions";
+
+      var openBtn = document.createElement("button");
+      openBtn.textContent = "เปิด PDF";
+      openBtn.addEventListener("click", function () { openPdf(doc.id); });
+
+      var dlBtn = document.createElement("button");
+      dlBtn.textContent = "ดาวน์โหลด";
+      dlBtn.addEventListener("click", function () { downloadPdf(doc.id); });
+
+      actions.appendChild(openBtn);
+      actions.appendChild(dlBtn);
+
+      card.appendChild(meta);
+      card.appendChild(excerpt);
+      card.appendChild(actions);
+      resultsEl.appendChild(card);
+    });
+  }
+
+  document.getElementById("search-btn").addEventListener("click", function () {
+    renderResults(queryInput.value);
+  });
+  queryInput.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") renderResults(queryInput.value);
+  });
+
+  // ---------- Library view ----------
+  var libraryEl = document.getElementById("library-list");
+  DOCS.forEach(function (doc) {
+    var card = document.createElement("div");
+    card.className = "doc-card";
+
+    var title = document.createElement("p");
+    title.className = "doc-title";
+    title.textContent = doc.title;
+
+    var desc = document.createElement("p");
+    desc.className = "doc-desc";
+    desc.textContent = doc.desc;
+
+    var actions = document.createElement("div");
+    actions.className = "actions";
+
+    var openBtn = document.createElement("button");
+    openBtn.textContent = "เปิด PDF";
+    openBtn.addEventListener("click", function () { openPdf(doc.id); });
+
+    var dlBtn = document.createElement("button");
+    dlBtn.textContent = "ดาวน์โหลด";
+    dlBtn.addEventListener("click", function () { downloadPdf(doc.id); });
+
+    actions.appendChild(openBtn);
+    actions.appendChild(dlBtn);
+
+    card.appendChild(title);
+    card.appendChild(desc);
+    card.appendChild(actions);
+    libraryEl.appendChild(card);
+  });
+
+  // ---------- Tabs ----------
+  var tabBtns = document.querySelectorAll(".tab-btn");
+  tabBtns.forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      tabBtns.forEach(function (b) { b.classList.remove("active"); });
+      btn.classList.add("active");
+      document.querySelectorAll(".view").forEach(function (v) { v.classList.remove("active"); });
+      document.getElementById("view-" + btn.dataset.view).classList.add("active");
+    });
+  });
+})();
+</script>
+</body>
+</html>
